@@ -1,0 +1,75 @@
+{
+    "version":      1,
+    "fileType":  "FactMetaData",
+    "QGC.MetaData.Facts":
+[
+{
+    "name":             "apiEndpoint",
+    "shortDesc": "LLM API Endpoint",
+    "longDesc":  "Chat Completions endpoint URL. SiliconFlow, DeepSeek, OpenAI, or any OpenAI-compatible server.",
+    "type":             "string",
+    "default":     "https://api.siliconflow.cn/v1/chat/completions"
+},
+{
+    "name":             "modelName",
+    "shortDesc": "LLM Model Name",
+    "longDesc":  "Model identifier. SiliconFlow naming: deepseek-ai/DeepSeek-V3, Pro/deepseek-ai/DeepSeek-V3, Qwen/Qwen2.5-7B-Instruct, etc.",
+    "type":             "string",
+    "default":     "deepseek-ai/DeepSeek-V3"
+},
+{
+    "name":             "apiKey",
+    "shortDesc": "LLM API Key",
+    "longDesc":  "Authentication key for the LLM API. Never commit a real key here — leave it empty and set it in this settings page, or export QGC_LLM_API_KEY in the environment.",
+    "type":             "string",
+    "default":     ""
+},
+{
+    "name":             "sttEndpoint",
+    "shortDesc": "STT Endpoint",
+    "longDesc":  "Speech-to-Text transcription endpoint (Whisper /audio/transcriptions format). SiliconFlow offers free tier with SenseVoiceSmall for Chinese+English. Leave empty to disable voice input.",
+    "type":             "string",
+    "default":     "https://api.siliconflow.cn/v1/audio/transcriptions"
+},
+{
+    "name":             "sttModel",
+    "shortDesc": "STT Model",
+    "longDesc":  "STT model name. SenseVoiceSmall supports Chinese+English with fast inference. Also works with whisper-1, whiser-large-v3, etc.",
+    "type":             "string",
+    "default":     "FunAudioLLM/SenseVoiceSmall"
+},
+{
+    "name":             "sttApiKey",
+    "shortDesc": "STT API Key",
+    "longDesc":  "Authentication key for the STT service. Leave empty to reuse the LLM API Key above.",
+    "type":             "string",
+    "default":     ""
+},
+{
+    "name":             "systemPrompt",
+    "shortDesc": "System Prompt",
+    "longDesc":  "System prompt sent to the LLM — defines its role, available plan modes, parameter specs, and output format. Edit to customize the planner's behavior.",
+    "type":             "string",
+    "default":     "You are an expert drone mission planner for QGroundControl. The user describes a survey/inspection/search mission in natural language (Chinese or English). Your job: output ONLY a valid JSON object — no markdown, no explanation, no code fences.\n\n# Plan Modes\n- \"spiral\": Area scanning spiral. Params: spacing(m, default 25), turns(default 5), altitude(m, default 80), direction(0=CW 1=CCW), rotationAngle(deg, default 0). startRadius auto=spacing.\n- \"fom\": Circular/calibration pattern. Params: radius(m, default 30), loops(default 3), pointsPerLoop(default 36), altitude(m, default 50), altitudeStep(m/loop, default 0).\n- \"survey\": Rectangular grid mapping. Params: width(m), height(m), spacing(m, default 30), angle(deg, default 0), altitude(m, default 50). Area centered on map center.\n- \"square\": Expanding-square SAR search pattern. Params: spacing(m, default 25), legs(default 12), altitude(m, default 80), direction(0=CW 1=CCW).\n- \"custom\": Freeform path. Params: offsets(array of {east_meters, north_meters} from center), closeLoop(bool), altitude(m).\n\n# Rules\n1. Extract ALL numeric values from the user's words. Use metric units (meters).\n2. If user says \"spiral 50m spacing 6 turns at 100m\", use those exact numbers.\n3. Default any missing value to the stated defaults above.\n4. Return ONLY: {\"planMode\":\"...\",\"params\":{...}}\n5. \"fly in a circle\" → fom. \"grid/search area/map this field\" → survey. \"spiral/scan area\" → spiral. \"SAR/search pattern/expanding\" → square. \"fly these points\" → custom."
+},
+{
+    "name":             "defaultFlightSpeed",
+    "shortDesc": "Default Flight Speed",
+    "longDesc":  "Default cruise speed (m/s) for LLM-generated missions.",
+    "type":             "double",
+    "min":               1.0,
+    "max":               30.0,
+    "decimalPlaces":     1,
+    "default":     5.0
+},
+{
+    "name":             "defaultAltitudeMode",
+    "shortDesc": "Default Altitude Mode",
+    "longDesc":  "Default altitude reference for LLM-generated missions. 0=Relative to Takeoff, 1=AMSL.",
+    "type":             "uint32",
+    "enumStrings":      "Relative to Takeoff, AMSL",
+    "enumValues":       "0, 1",
+    "default":     0
+}
+]
+}
