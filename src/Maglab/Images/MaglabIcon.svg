@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+    <!-- Monochrome horseshoe magnet. Toolstrip tints via the alpha channel. -->
+    <path fill="#000000" fill-rule="evenodd" d="
+        M5 3h4v8a3 3 0 0 0 6 0V3h4v8a7 7 0 0 1-14 0V3zm0 8h4v3h-4v-3zm10 0h4v3h-4v-3z"/>
+</svg>
