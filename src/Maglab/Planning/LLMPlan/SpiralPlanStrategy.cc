@@ -191,6 +191,7 @@ void SpiralPlanStrategy::_recomputeIfReady()
         _pointRadius.clear();
         _pointArc.clear();
         _arcTargetSpeed.clear();
+        _arcSegments.clear();
         _numArcs = 0;
         _lastItemCount = 0;
         _complexDistance = 0.0;
@@ -221,6 +222,7 @@ void SpiralPlanStrategy::_recomputeIfReady()
     }
 
     _displayPath.clear();
+    _arcSegments.clear();
     _arcBoundaryPoints.clear();
     _pointRadius.clear();
     _pointArc.clear();
@@ -249,6 +251,15 @@ void SpiralPlanStrategy::_recomputeIfReady()
                 rotation + directionSign * qRadiansToDegrees(arcStart);
         _arcBoundaryPoints.append(
                 arcCenter.atDistanceAndAzimuth(arcRadius, boundaryAzimuth));
+
+        LLMArcSegment segment;
+        segment.center = arcCenter;
+        segment.radius = arcRadius;
+        segment.startAngleDeg =
+                rotation + directionSign * qRadiansToDegrees(arcStart);
+        segment.sweepAngleDeg = qRadiansToDegrees(arcSweep);
+        segment.clockwise = (direction == 0);
+        _arcSegments.append(segment);
 
         const double angularStep =
                 qMin(sampleDistance / qMax(arcRadius, 0.1), maxAngularStep);

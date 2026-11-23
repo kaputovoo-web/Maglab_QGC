@@ -15,6 +15,7 @@
 #include "QGCMapPolygon.h"
 #include "QGCApplication.h"
 #include "Vehicle.h"
+#include "FirmwarePlugin.h"
 
 #include <QtMath>
 #include <QJsonArray>
@@ -354,10 +355,15 @@ void SketchComplexItem::appendMissionItems(QList<MissionItem*>& items, QObject* 
 
     items.append(new MissionItem(seq++, MAV_CMD_DO_CHANGE_SPEED, MAV_FRAME_MISSION,
                                  1, speed, -1, 0, 0,0,0, true, false, missionItemParent));
+    const bool splineSupported = _controllerVehicle != nullptr &&
+            _controllerVehicle->firmwarePlugin()->supportedMissionCommands(
+                _controllerVehicle->vehicleClass()).contains(MAV_CMD_NAV_SPLINE_WAYPOINT);
     const int n = _points.size();
     for (int i = 0; i < n; ++i) {
         bool curve = (_effectiveStyle(i) == 1) && (i != 0) && (i != n - 1);  // user-selected curved path
-        MAV_CMD cmd = curve ? MAV_CMD_NAV_SPLINE_WAYPOINT : MAV_CMD_NAV_WAYPOINT;
+        // ArduPlane/QuadPlane rejects spline waypoints at upload time.
+        MAV_CMD cmd = (curve && splineSupported) ? MAV_CMD_NAV_SPLINE_WAYPOINT
+                                                 : MAV_CMD_NAV_WAYPOINT;
         items.append(new MissionItem(seq++, cmd, frame,
                                      0.0, (cmd == MAV_CMD_NAV_WAYPOINT ? 1.0 : 0.0), 0.0, 0.0,
                                      _points[i].latitude(), _points[i].longitude(), relAlt,

@@ -3,6 +3,7 @@
 #include "Planning/LLMPlan/CustomPlanStrategy.h"
 #include "Planning/LLMPlan/FomPlanStrategy.h"
 #include "Planning/LLMPlan/SpiralPlanStrategy.h"
+#include "Planning/LLMPlan/SpiralMissionItemBuilder.h"
 #include "Planning/LLMPlan/SquarePlanStrategy.h"
 
 #include <QJsonArray>
@@ -61,6 +62,49 @@ void MaglabPlanStrategyTest::testGeneratedOutput()
             QCOMPARE(strategy->lastSequenceNumber(), declaredCount);
         }
     }
+}
+
+
+void MaglabPlanStrategyTest::testSpiralMissionItemBuilders()
+{
+    SpiralPlanStrategy strategy;
+    QJsonObject params = strategy.saveParams();
+    params[QStringLiteral("altitudeMode")] = 0;
+    params[QStringLiteral("turns")] = 2.0;
+    QVERIFY(strategy.loadParams(params));
+    strategy.recomputeGeometry(QGeoCoordinate(36.0, 120.0, 50.0));
+    QVERIFY(strategy.arcSegments().size() >= 4);
+
+    QObject splineOwner;
+    const auto splineItems = SpiralMissionItemBuilder::build(
+        strategy, false, false, 80.0, MAV_FRAME_GLOBAL_RELATIVE_ALT, &splineOwner);
+    QCOMPARE(splineItems.size(), SpiralMissionItemBuilder::itemCount(strategy, false, false));
+    QVERIFY(!splineItems.isEmpty());
+    QCOMPARE(splineItems.first()->command(), MAV_CMD_DO_CHANGE_SPEED);
+    QCOMPARE(splineItems.at(1)->command(), MAV_CMD_NAV_WAYPOINT);
+    QCOMPARE(splineItems.at(2)->command(), MAV_CMD_NAV_SPLINE_WAYPOINT);
+
+    QObject multiRotorOwner;
+    const auto multiRotorItems = SpiralMissionItemBuilder::build(
+        strategy, true, false, 80.0, MAV_FRAME_GLOBAL_RELATIVE_ALT, &multiRotorOwner);
+    QCOMPARE(multiRotorItems.size(), SpiralMissionItemBuilder::itemCount(strategy, true, false));
+    QCOMPARE(multiRotorItems.first()->command(), MAV_CMD_DO_CHANGE_SPEED);
+    for (int i = 1; i < multiRotorItems.size(); ++i) {
+        QCOMPARE(multiRotorItems.at(i)->command(), MAV_CMD_NAV_LOITER_TURNS);
+        QCOMPARE(multiRotorItems.at(i)->param1(), 0.5);
+        QCOMPARE(multiRotorItems.at(i)->param2(), 1.0);
+        QVERIFY(std::isfinite(multiRotorItems.at(i)->param3()));
+        QCOMPARE(multiRotorItems.at(i)->param4(), 1.0);
+    }
+
+    QObject vtolOwner;
+    const auto vtolItems = SpiralMissionItemBuilder::build(
+        strategy, true, true, 80.0, MAV_FRAME_GLOBAL_RELATIVE_ALT, &vtolOwner);
+    QCOMPARE(vtolItems.size(), SpiralMissionItemBuilder::itemCount(strategy, true, true));
+    QCOMPARE(vtolItems.at(1)->command(), MAV_CMD_DO_VTOL_TRANSITION);
+    QCOMPARE(vtolItems.at(1)->param1(), 4.0);
+    QCOMPARE(vtolItems.last()->command(), MAV_CMD_DO_VTOL_TRANSITION);
+    QCOMPARE(vtolItems.last()->param1(), 3.0);
 }
 
 UT_REGISTER_TEST(MaglabPlanStrategyTest, TestLabel::Unit)

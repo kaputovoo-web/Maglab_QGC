@@ -568,6 +568,14 @@ QList<MAV_CMD> APMFirmwarePlugin::supportedMissionCommands(QGCMAVLink::VehicleCl
         supportedCommands += flightCommands;
     }
 
+    // ArduPlane rejects MAV_CMD_NAV_SPLINE_WAYPOINT during mission upload,
+    // including when it is running as a QuadPlane/VTOL. Do not advertise it
+    // for fixed-wing or VTOL planning; ArduCopter still supports it.
+    if (vehicleClass == QGCMAVLink::VehicleClassFixedWing ||
+            vehicleClass == QGCMAVLink::VehicleClassVTOL) {
+        supportedCommands.removeAll(MAV_CMD_NAV_SPLINE_WAYPOINT);
+    }
+
     if (SettingsManager::instance()->planViewSettings()->useConditionGate()->rawValue().toBool()) {
         supportedCommands.append(MAV_CMD_CONDITION_GATE);
     }

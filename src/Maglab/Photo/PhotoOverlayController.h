@@ -18,6 +18,9 @@ struct PhotoOverlayResult
     bool ok = false;
     bool cancelled = false;
     QString error;
+    double geoMinLon = 0.0, geoMaxLon = 0.0, geoMinLat = 0.0, geoMaxLat = 0.0;
+    double mapMinValue = 0.0, mapMaxValue = 0.0;
+    double metersPerPixel = 0.0;
     QString outputPath;
     QImage image;
     int outputWidth = 0;
@@ -39,6 +42,13 @@ class PhotoOverlayController : public QObject
     Q_PROPERTY(QString outputPath READ outputPath NOTIFY outputPathChanged)
     Q_PROPERTY(QString previewPath READ previewPath NOTIFY previewPathChanged)
     Q_PROPERTY(bool hasPreview READ hasPreview NOTIFY previewPathChanged)
+    Q_PROPERTY(double geoMinLon READ geoMinLon NOTIFY previewPathChanged)
+    Q_PROPERTY(double geoMaxLon READ geoMaxLon NOTIFY previewPathChanged)
+    Q_PROPERTY(double geoMinLat READ geoMinLat NOTIFY previewPathChanged)
+    Q_PROPERTY(double geoMaxLat READ geoMaxLat NOTIFY previewPathChanged)
+    Q_PROPERTY(double mapMinValue READ mapMinValue NOTIFY previewPathChanged)
+    Q_PROPERTY(double mapMaxValue READ mapMaxValue NOTIFY previewPathChanged)
+    Q_PROPERTY(double metersPerPixel READ metersPerPixel NOTIFY previewPathChanged)
     Q_PROPERTY(int outputWidth READ outputWidth NOTIFY outputSizeChanged)
     Q_PROPERTY(int outputHeight READ outputHeight NOTIFY outputSizeChanged)
     Q_PROPERTY(QString errorString READ errorString NOTIFY errorStringChanged)
@@ -57,6 +67,13 @@ public:
     QString outputPath() const { return _outputPath; }
     QString previewPath() const { return _previewPath; }
     bool hasPreview() const { return !_previewImage.isNull(); }
+    double geoMinLon() const { return _geoMinLon; }
+    double geoMaxLon() const { return _geoMaxLon; }
+    double geoMinLat() const { return _geoMinLat; }
+    double geoMaxLat() const { return _geoMaxLat; }
+    double mapMinValue() const { return _mapMinValue; }
+    double mapMaxValue() const { return _mapMaxValue; }
+    double metersPerPixel() const { return _metersPerPixel; }
     int outputWidth() const { return _outputWidth; }
     int outputHeight() const { return _outputHeight; }
     QString errorString() const { return _errorString; }
@@ -84,12 +101,17 @@ public:
     Q_INVOKABLE QVariantMap loadBundle(const QString& manifestPath);
     Q_INVOKABLE QString findAssociatedMap(const QString& photoPath) const;
     Q_INVOKABLE QVariantMap pixelToGeo(const QString& photoPath, double x, double y) const;
+    /// Project a ground coordinate back to the raw photo pixel used by the
+    /// interactive overlay preview.
+    Q_INVOKABLE QVariantMap geoToPixel(const QString& photoPath, double lon, double lat) const;
     Q_INVOKABLE QVariantMap mapPixelToGeo(const QString& magImagePath, double x, double y) const;
+    Q_INVOKABLE QVariantMap mapGeoInfo(const QString& magImagePath) const;
     Q_INVOKABLE QString saveOutput();
     Q_INVOKABLE double readSurveyAgl(const QString& surveyPath) const;
     Q_INVOKABLE void generate(const QString& photoPath, const QString& magImagePath,
                               double minValue = std::numeric_limits<double>::quiet_NaN(),
-                              double maxValue = std::numeric_limits<double>::quiet_NaN());
+                              double maxValue = std::numeric_limits<double>::quiet_NaN(),
+                              const QString& trajectoryPath = QString());
     Q_INVOKABLE void cancel();
 
 signals:
@@ -117,6 +139,11 @@ private:
     QString _previewPath;
     QImage _previewImage;
     int _outputWidth = 0;
+    double _geoMinLon = 0.0, _geoMaxLon = 0.0, _geoMinLat = 0.0, _geoMaxLat = 0.0;
+    double _mapMinValue = 0.0, _mapMaxValue = 0.0, _metersPerPixel = 0.0;
+    QString _lastPhotoPath, _lastMagPath, _lastTrajectoryPath;
+    double _lastMinValue = std::numeric_limits<double>::quiet_NaN();
+    double _lastMaxValue = std::numeric_limits<double>::quiet_NaN();
     int _outputHeight = 0;
     QString _errorString;
     QString _statusText;

@@ -1102,6 +1102,28 @@ void MissionController::_recalcFlightPathSegments(void)
                 firstCoordinateNotFound = false;
                 lastFlyThroughVI = visualItem;
             } else {
+                if (_flyView &&
+                        lastFlyThroughVI != _settingsItem &&
+                        lastFlyThroughVI->isSimpleItem() &&
+                        visualItem->isSimpleItem()) {
+                    // Uploaded spiral loiters are displayed as one reconstructed
+                    // spiral polyline by PlanMapItems. Do not also draw the
+                    // straight centre-to-centre segment between two half-turn
+                    // loiter commands; it would cut across every arc.
+                    const auto* lastSimple = qobject_cast<SimpleMissionItem*>(lastFlyThroughVI);
+                    const auto* currentSimple = qobject_cast<SimpleMissionItem*>(visualItem);
+                    const bool lastHalfTurn = lastSimple &&
+                            lastSimple->mavCommand() == MAV_CMD_NAV_LOITER_TURNS &&
+                            qAbs(lastSimple->loiterTurns() - 0.5) < 0.01;
+                    const bool currentHalfTurn = currentSimple &&
+                            currentSimple->mavCommand() == MAV_CMD_NAV_LOITER_TURNS &&
+                            qAbs(currentSimple->loiterTurns() - 0.5) < 0.01;
+                    if (lastHalfTurn && currentHalfTurn) {
+                        firstCoordinateNotFound = false;
+                        lastFlyThroughVI = visualItem;
+                        continue;
+                    }
+                }
                 if (lastFlyThroughVI != _settingsItem || (homePositionValid && linkStartToHome)) {
                     bool addDirectionArrow = false;
                     if (i != 1) {

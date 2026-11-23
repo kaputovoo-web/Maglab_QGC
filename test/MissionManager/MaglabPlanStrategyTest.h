@@ -7,4 +7,5 @@ class MaglabPlanStrategyTest : public UnitTest
     Q_OBJECT
 private slots:
     void testGeneratedOutput();
+    void testSpiralMissionItemBuilders();
 };

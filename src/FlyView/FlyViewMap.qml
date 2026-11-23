@@ -38,6 +38,7 @@ FlightMap {
     property bool   _keepMapCenteredOnVehicle:  _flyViewSettings.keepMapCenteredOnVehicle.rawValue
 
     property bool   _disableVehicleTracking:    false
+    property bool   _programmaticCenterUpdate:  false
     property bool   _keepVehicleCentered:       pipMode ? true : false
     property bool   _saveZoomLevelSetting:      true
     property bool   followVehicle:              false
@@ -66,7 +67,9 @@ FlightMap {
             // Synchronize center position with Plan View
             center = QGroundControl.flightMapPosition
             if (followVehicle && _activeVehicleCoordinate.isValid) {
+                _programmaticCenterUpdate = true
                 center = _activeVehicleCoordinate
+                _programmaticCenterUpdate = false
             }
         }
     }
@@ -117,6 +120,11 @@ FlightMap {
     // A manual pan explicitly leaves the session-local follow mode so the map does not fight
     // the operator's gesture.
     onMapPanStart: {
+        // Programmatic centre changes made while following must not be
+        // mistaken for an operator pan and cancel follow mode.
+        if (_programmaticCenterUpdate) {
+            return
+        }
         _disableVehicleTracking = true
         if (followVehicle) {
             followVehicle = false
@@ -133,7 +141,9 @@ FlightMap {
             animateLong.stop()
             _disableVehicleTracking = false
             if (_activeVehicleCoordinate.isValid) {
+                _programmaticCenterUpdate = true
                 center = _activeVehicleCoordinate
+                _programmaticCenterUpdate = false
             }
         } else {
             bearing = 0
@@ -247,7 +257,9 @@ FlightMap {
                 animateLat.stop()
                 animateLong.stop()
             }
+            _programmaticCenterUpdate = true
             _root.center = _activeVehicleCoordinate
+            _programmaticCenterUpdate = false
         }
     }
 
@@ -329,6 +341,7 @@ FlightMap {
         delegate: VehicleMapItem {
             vehicle:        object
             coordinate:     object.coordinate
+            heading:        object.heading.value
             map:            _root
             size:           pipMode ? ScreenTools.defaultFontPixelHeight : ScreenTools.defaultFontPixelHeight * 3
             z:              QGroundControl.zOrderVehicles

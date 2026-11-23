@@ -251,7 +251,10 @@ Item {
 
             onClicked: {
                 if (mapControl && _activeVehicle && _activeVehicle.coordinate.isValid) {
-                    mapControl.followVehicle = false
+                    // The centre button is a persistent "keep the vehicle
+                    // centred" action, not a one-shot jump. Follow mode owns
+                    // the centre until the operator pans the map or disables it.
+                    mapControl.followVehicle = true
                     mapControl.center = _activeVehicle.coordinate
                 }
             }

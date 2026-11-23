@@ -574,6 +574,11 @@ bool SimpleMissionItem::showLoiterRadius() const
     return specifiesCoordinate() && (_controllerVehicle->fixedWing() || _controllerVehicle->vtol()) && isLoiterItem();
 }
 
+double SimpleMissionItem::loiterTurns() const
+{
+    return command() == MAV_CMD_NAV_LOITER_TURNS ? missionItem().param1() : qQNaN();
+}
+
 double SimpleMissionItem::loiterRadius() const
 {
     if (isLoiterItem()) {

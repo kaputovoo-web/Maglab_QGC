@@ -149,6 +149,15 @@ ApplicationWindow {
         Qt.callLater(function() { planView.openInFlightReplace(false) })
     }
 
+    /// Photo overlay can request a centred survey plan. Defer creation until
+    /// Plan View is visible and its offline controller has been started.
+    function createSurveyPlan(center, width, height, spacing) {
+        showPlanView()
+        Qt.callLater(function() {
+            planView.createSurveyAt(center, width, height, spacing)
+        })
+    }
+
     function showFlyView() {
         flyView.visible = true
         planView.visible = false
@@ -835,4 +844,16 @@ ApplicationWindow {
             }
         }
     }
+
+    // HYH + HEU product startup branding. The native Android splash uses the
+    // same artwork; this covers the short desktop startup window.
+    Loader {
+        id: startupBrandOverlay
+        anchors.fill: parent
+        z: QGroundControl.zOrderTopMost + 50
+        source: QGroundControl.corePlugin.maglabModulesEnabled
+                ? "qrc:/maglab/StartupBrandOverlay.qml" : ""
+        active: source.toString() !== ""
+    }
+
 }

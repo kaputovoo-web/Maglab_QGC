@@ -17,6 +17,7 @@
 
 #include "Fact.h"
 #include "MissionItem.h"
+#include "LLMPlanTypes.h"
 
 /// @brief Abstract base class for LLM sub-mode strategies.
 ///
@@ -57,6 +58,9 @@ public:
     /// Restore this strategy's parameter values from JSON.
     /// @return true on success, false on parse error.
     virtual bool loadParams(const QJsonObject& params) = 0;
+
+    /// @return Circular arc segments when the strategy produces native arcs.
+    virtual QList<LLMArcSegment> arcSegments() const { return {}; }
 
     /// @return Total flight distance in meters.
     virtual double complexDistance() const = 0;

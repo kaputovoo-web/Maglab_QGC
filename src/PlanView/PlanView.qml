@@ -95,6 +95,46 @@ Item {
         return coordinate
     }
 
+    /// Create a native Survey centred on @p center and replace the current
+    /// mission. Used when the photo-overlay page asks for a centred scan grid.
+    function createSurveyAt(center, width, height, spacing) {
+        if (!_planMasterController || !center || !center.isValid ||
+                !(width > 0) || !(height > 0) || !(spacing > 0)) {
+            return
+        }
+
+        _planMasterController.removeAll()
+
+        var item = _missionController.insertComplexMissionItem(
+                    "Survey", center, -1, true /* makeCurrentItem */)
+        if (!item) {
+            return
+        }
+
+        var halfW = width / 2
+        var halfH = height / 2
+        var north = center.atDistanceAndAzimuth(halfH, 0)
+        var south = center.atDistanceAndAzimuth(halfH, 180)
+        var polygon = item.surveyAreaPolygon
+        polygon.beginReset()
+        polygon.clear()
+        polygon.appendVertex(north.atDistanceAndAzimuth(halfW, -90)) // NW
+        polygon.appendVertex(north.atDistanceAndAzimuth(halfW,  90)) // NE
+        polygon.appendVertex(south.atDistanceAndAzimuth(halfW,  90)) // SE
+        polygon.appendVertex(south.atDistanceAndAzimuth(halfW, -90)) // SW
+        polygon.endReset()
+
+        var camera = item.cameraCalc
+        camera.cameraBrand = camera.xlatManualCameraName
+        camera.valueSetIsDistance.value = 1
+        camera.distanceToSurface.value = 50
+        camera.adjustedFootprintSide.value = spacing
+        camera.adjustedFootprintFrontal.value = spacing
+        item.gridAngle.value = 0
+
+        mapFitFunctions.fitMapViewportToMissionItems()
+    }
+
     InFlightMissionReplaceController {
         id: inFlightMissionReplaceController
         planMasterController: _root._planMasterController

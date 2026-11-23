@@ -32,6 +32,7 @@ public:
     Q_PROPERTY(bool             isLoiterItem            READ isLoiterItem                                       NOTIFY isLoiterItemChanged)
     Q_PROPERTY(bool             showLoiterRadius        READ showLoiterRadius                                   NOTIFY showLoiterRadiusChanged)
     Q_PROPERTY(double           loiterRadius            READ loiterRadius           WRITE setRadius             NOTIFY loiterRadiusChanged)
+    Q_PROPERTY(double           loiterTurns             READ loiterTurns                                        NOTIFY commandChanged)
 
     /// Optional sections
     Q_PROPERTY(QObject*         speedSection            READ speedSection                                       NOTIFY speedSectionChanged)
@@ -71,6 +72,7 @@ public:
     bool            isLoiterItem        (void) const;
     bool            showLoiterRadius    (void) const;
     double          loiterRadius        (void) const;
+    double          loiterTurns         (void) const;
 
     CameraSection*  cameraSection       (void) { return _cameraSection; }
     SpeedSection*   speedSection        (void) { return _speedSection; }

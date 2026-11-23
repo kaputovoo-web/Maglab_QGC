@@ -52,9 +52,17 @@ public:
     };
     Q_ENUM(PlanMode)
 
+    enum SpiralOutputMode {
+        SpiralSpline = 0,
+        SpiralLoiterTurns = 1,
+    };
+    Q_ENUM(SpiralOutputMode)
+
     LLMComplexItem(PlanMasterController* masterController, bool flyView, const QString& kmlOrShpFile);
 
     Q_PROPERTY(int           planMode      READ planMode      WRITE setPlanMode  NOTIFY planModeChanged)
+    Q_PROPERTY(int           spiralOutputMode READ spiralOutputMode WRITE setSpiralOutputMode NOTIFY spiralOutputModeChanged)
+    Q_PROPERTY(bool          spiralSplineAvailable READ spiralSplineAvailable NOTIFY spiralOutputModeChanged)
     Q_PROPERTY(QVariantList  path          READ path                              NOTIFY pathChanged)
     Q_PROPERTY(QVariantList  arcBoundaryPath READ arcBoundaryPath                 NOTIFY pathChanged)
     Q_PROPERTY(int           waypointCount READ waypointCount                     NOTIFY pathChanged)
@@ -69,6 +77,9 @@ public:
     Q_PROPERTY(bool           safetyReviewBusy   READ safetyReviewBusy             NOTIFY safetyReviewChanged)
 
     int          planMode()            const { return _planMode; }
+    int          spiralOutputMode()    const;
+    bool         spiralSplineAvailable() const;
+    void         setSpiralOutputMode(int mode);
     QVariantList path()                const;
     QVariantList arcBoundaryPath()     const;
     int          waypointCount()       const;
@@ -147,6 +158,7 @@ public:
 
 signals:
     void planModeChanged(int planMode);
+    void spiralOutputModeChanged(int mode);
     void pathChanged();
     void voiceStatusChanged();
     void safetyReviewChanged();
@@ -171,10 +183,13 @@ private:
 
     void _initStrategies();
     void _activateStrategy(int mode);
+    QList<MissionItem*> _generateStrategyItems(double relAlt, MAV_FRAME frame, QObject* parent) const;
+    int _generatedStrategyItemCount() const;
     void _disconnectStrategy(LLMPlanStrategy* strategy);
     void _connectStrategy(LLMPlanStrategy* strategy);
 
     int _planMode = Voice;
+    int _spiralOutputMode = SpiralSpline;
     int _sequenceNumber = 0;
     bool _dirty = false;
     bool _polygonChanging = false;

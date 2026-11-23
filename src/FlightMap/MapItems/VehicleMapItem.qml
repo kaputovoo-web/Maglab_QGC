@@ -92,9 +92,9 @@ MapQuickItem {
 
         Image {
             id:                 vehicleIcon
-            // Maglab uses a transparent drone glyph instead of the upstream
-            // filled arrow marker. The source SVG has no background plate.
-            source:             vehicle ? "/InstrumentValueIcons/drone.svg" : ""
+            // Keep the standard QGC arrow marker. It already has a transparent
+            // background and preserves the expected nose/heading direction.
+            source:             vehicle ? vehicle.vehicleImageOpaque : ""
             mipmap:             true
             width:              _root.size
             sourceSize.width:   _root.size

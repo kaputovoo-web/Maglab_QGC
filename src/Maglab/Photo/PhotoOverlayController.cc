@@ -6,6 +6,7 @@
 
 #include <QFont>
 #include <QFontMetrics>
+#include <QRegularExpression>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QVariantMap>
@@ -159,10 +160,42 @@ bool readPose(const QString& path, PhotoPose& pose, QString& error)
     return true;
 }
 
+QVector<QPointF> readTrajectoryPixels(const QString& path, const GeoCameraProjector::CameraPose& pose,
+                                         const GeoCameraProjector::CameraIntrinsics& K)
+{
+    QVector<QPointF> points;
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return points;
+    QTextStream stream(&file);
+    const QString header = stream.readLine();
+    const QStringList names = header.split(QRegularExpression(QStringLiteral("[,;\t]")));
+    int lonCol = -1, latCol = -1;
+    for (int i = 0; i < names.size(); ++i) {
+        const QString n = names.at(i).trimmed().toLower();
+        if (lonCol < 0 && (n.contains(QStringLiteral("经度")) || n == QStringLiteral("lon") || n.contains(QStringLiteral("longitude")))) lonCol = i;
+        if (latCol < 0 && (n.contains(QStringLiteral("纬度")) || n == QStringLiteral("lat") || n.contains(QStringLiteral("latitude")))) latCol = i;
+    }
+    if (lonCol < 0 || latCol < 0) return points;
+    while (!stream.atEnd()) {
+        const QStringList fields = stream.readLine().split(QRegularExpression(QStringLiteral("[,;\t]")));
+        if (fields.size() <= qMax(lonCol, latCol)) continue;
+        bool lonOk = false, latOk = false;
+        const double lon = fields.at(lonCol).trimmed().toDouble(&lonOk);
+        const double lat = fields.at(latCol).trimmed().toDouble(&latOk);
+        QPointF px;
+        if (lonOk && latOk && GeoCameraProjector::geoToPixelByPose(lat, lon, 0.0, pose, K, px)) {
+            points.append(px);
+        }
+    }
+    return points;
+}
+
 PhotoOverlayResult buildOverlay(const QString& photoPath, const QString& magImagePath,
                                 double hfov, double vfov, double heightAGL,
                                 double yawOffset, double transparency,
                                 double requestedMin, double requestedMax,
+                                const QString& trajectoryPath,
+                                bool decorated,
                                 const QString& outputPath,
                                 const std::shared_ptr<std::atomic_bool>& cancel)
 {
@@ -215,6 +248,8 @@ PhotoOverlayResult buildOverlay(const QString& photoPath, const QString& magImag
     cameraPose.pitchDeg = pose.pitch;
     cameraPose.yawDeg = pose.yaw + yawOffset;
 
+    const QVector<QPointF> trajectory = readTrajectoryPixels(trajectoryPath, cameraPose, K);
+
     QPointF projected[4];
     for (int i = 0; i < 4; ++i) {
         if (cancel && cancel->load()) {
@@ -242,17 +277,23 @@ PhotoOverlayResult buildOverlay(const QString& photoPath, const QString& magImag
     // fit for the overlay image, not a replacement for camera calibration.
     QRectF mapBounds = target.boundingRect();
     const qreal margin = 8.0;
+    qreal fitScale = 1.0;
+    QPointF fitCenter = mapBounds.center();
+    const QPointF photoCenter(photo.width() / 2.0, photo.height() / 2.0);
     if (mapBounds.left() < margin || mapBounds.top() < margin ||
         mapBounds.right() > photo.width() - margin ||
         mapBounds.bottom() > photo.height() - margin) {
         const qreal sx = (photo.width() - 2 * margin) / qMax(1.0, mapBounds.width());
         const qreal sy = (photo.height() - 2 * margin) / qMax(1.0, mapBounds.height());
-        const qreal scale = qMin(sx, sy);
-        const QPointF bc = mapBounds.center();
-        const QPointF pc(photo.width() / 2.0, photo.height() / 2.0);
+        fitScale = qMin(sx, sy);
         for (QPointF& point : target) {
-            point = pc + (point - bc) * scale;
+            point = photoCenter + (point - fitCenter) * fitScale;
         }
+    }
+    QVector<QPointF> fittedTrajectory;
+    fittedTrajectory.reserve(trajectory.size());
+    for (QPointF point : trajectory) {
+        fittedTrajectory.append(fitScale == 1.0 ? point : photoCenter + (point - fitCenter) * fitScale);
     }
 
     QTransform transform;
@@ -261,10 +302,10 @@ PhotoOverlayResult buildOverlay(const QString& photoPath, const QString& magImag
         return result;
     }
 
-    const int left = 160;
-    const int top = 70;
-    const int bottomAxis = 200;
-    const int rightBar = 260;
+    const int left = decorated ? 160 : 0;
+    const int top = decorated ? 70 : 0;
+    const int bottomAxis = decorated ? 200 : 0;
+    const int rightBar = decorated ? 260 : 0;
     QImage output(photo.width() + left + rightBar,
                   photo.height() + top + bottomAxis,
                   QImage::Format_RGB32);
@@ -283,6 +324,21 @@ PhotoOverlayResult buildOverlay(const QString& photoPath, const QString& magImag
     painter.drawImage(0, 0, mag);
     painter.restore();
 
+    // Black survey flight track inside the photo plot.
+    if (!fittedTrajectory.isEmpty()) {
+        painter.save();
+        painter.setClipRect(left, top, photo.width(), photo.height());
+        painter.setPen(QPen(QColor(20, 20, 20), 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.translate(left, top);
+        painter.drawPolyline(fittedTrajectory.constData(), fittedTrajectory.size());
+        painter.restore();
+    }
+
+    if (decorated) {
+        painter.setPen(QPen(QColor(23, 50, 77), 1.2));
+        painter.drawRect(left, top, photo.width(), photo.height());
+    }
+
     double lonMin = corners[0].lon, lonMax = corners[0].lon;
     double latMin = corners[0].lat, latMax = corners[0].lat;
     for (int i = 1; i < 4; ++i) {
@@ -292,103 +348,105 @@ PhotoOverlayResult buildOverlay(const QString& photoPath, const QString& magImag
         latMax = qMax(latMax, corners[i].lat);
     }
 
-    QFont axisFont(QStringLiteral("Times New Roman"), 18, QFont::Bold);
-    QFont titleFont(QStringLiteral("Times New Roman"), 22, QFont::Bold);
-    painter.setFont(axisFont);
-    painter.setPen(QColor(25, 38, 55));
-    painter.setRenderHint(QPainter::TextAntialiasing, true);
-
-    const int ticks = 5;
-    for (int i = 0; i <= ticks; ++i) {
-        const int x = left + i * (photo.width() - 1) / ticks;
-        painter.setPen(QPen(QColor(25, 38, 55), 1.4));
-        painter.drawLine(x, top + photo.height(), x, top + photo.height() + 7);
-        const double lon = lonMin + (lonMax - lonMin) * i / ticks;
-        painter.save();
-        painter.translate(x - 2, top + photo.height() + 10);
-        painter.rotate(45);
-        painter.drawText(0, 0, QString::number(lon, 'f', 6));
-        painter.restore();
-    }
-    for (int i = 0; i <= ticks; ++i) {
-        const int y = top + i * (photo.height() - 1) / ticks;
-        painter.setPen(QPen(QColor(25, 38, 55), 1.4));
-        painter.drawLine(left - 7, y, left, y);
-        const double lat = latMax - (latMax - latMin) * i / ticks;
-        painter.drawText(QRectF(2, y - 16, left - 18, 32),
-                         Qt::AlignRight | Qt::AlignVCenter,
-                         QString::number(lat, 'f', 6));
-    }
-    painter.setFont(titleFont);
-    painter.drawText(QRectF(left, output.height() - 32, photo.width(), 28),
-                     Qt::AlignHCenter | Qt::AlignVCenter, QStringLiteral("Longitude"));
-    painter.save();
-    painter.translate(22, top + photo.height() / 2);
-    painter.rotate(-90);
-    painter.drawText(QRectF(-140, -14, 280, 28), Qt::AlignCenter, QStringLiteral("Latitude"));
-    painter.restore();
-
-    if (std::isfinite(mapMinValue) && std::isfinite(mapMaxValue) &&
-        mapMaxValue > mapMinValue) {
-        const int barX = left + photo.width() + 42;
-        const int barY = top;
-        const int barW = 20;
-        const int barH = photo.height();
-        const int steps = 128;
-        for (int i = 0; i < steps; ++i) {
-            const double t = 1.0 - double(i) / double(steps - 1);
-            const double x = qBound(0.0, t, 1.0);
-            const auto channel = [x](double center) {
-                return qBound(0, qRound(255.0 * qBound(0.0, 1.5 - qAbs(4.0 * x - center), 1.0)), 255);
-            };
-            painter.fillRect(barX, barY + i * barH / steps, barW, barH / steps + 1,
-                             QColor(channel(3.0), channel(2.0), channel(1.0)));
-        }
-        painter.setPen(QPen(QColor(25, 38, 55), 1.4));
-        painter.drawRect(barX, barY, barW, barH);
-        painter.setFont(titleFont);
-        painter.drawText(QRectF(barX, barY - 42, 100, 28), Qt::AlignLeft, QStringLiteral("B (nT)"));
+    if (decorated) {
+        QFont axisFont(QStringLiteral("Times New Roman"), 18, QFont::Bold);
+        QFont titleFont(QStringLiteral("Times New Roman"), 22, QFont::Bold);
         painter.setFont(axisFont);
-        painter.drawText(QRectF(barX + barW + 10, barY - 12, 70, 24),
-                         Qt::AlignLeft | Qt::AlignVCenter, QString::number(mapMaxValue, 'f', 1));
-        painter.drawText(QRectF(barX + barW + 10, barY + barH / 2 - 12, 70, 24),
-                         Qt::AlignLeft | Qt::AlignVCenter,
-                         QString::number((mapMinValue + mapMaxValue) * 0.5, 'f', 1));
-        painter.drawText(QRectF(barX + barW + 10, barY + barH - 12, 70, 24),
-                         Qt::AlignLeft | Qt::AlignVCenter, QString::number(mapMinValue, 'f', 1));
-    }
-    // Ground scale bar. The estimate uses the nadir horizontal footprint
-    // derived from the active AGL and horizontal FOV.
-    const double effectiveAgl = pose.agl > 0.0 ? pose.agl : heightAGL;
-    if (effectiveAgl > 0.0 && photo.width() > 0) {
-        const double metersPerPixel = 2.0 * effectiveAgl
-                * std::tan(hfov * M_PI / 360.0) / double(photo.width());
-        double desiredMeters = photo.width() * 0.18 * metersPerPixel;
-        const double exponent = std::pow(10.0, std::floor(std::log10(qMax(desiredMeters, 0.001))));
-        const double base = desiredMeters / exponent;
-        const double nice = base < 1.5 ? 1.0 : (base < 3.5 ? 2.0 : (base < 7.5 ? 5.0 : 10.0));
-        const double meters = qMax(0.001, nice * exponent);
-        double scalePx = meters / metersPerPixel;
-        scalePx = qMin(scalePx, photo.width() * 0.35);
-        if (scalePx >= 12.0) {
-            const int x2 = left + photo.width() - 34;
-            const int x1 = x2 - int(scalePx);
-            const int y = top + photo.height() - 30;
-            QFont scaleFont(QStringLiteral("Times New Roman"), 16, QFont::Bold);
-            QFontMetrics fm(scaleFont);
-            const QString label = QStringLiteral("%1 m").arg(meters, 0, 'g', 3);
-            painter.setPen(QPen(QColor(0, 124, 138), 3.0));
-            painter.setBrush(Qt::NoBrush);
-            painter.drawLine(x1, y, x2, y);
-            painter.drawLine(x1, y - 9, x1, y);
-            painter.drawLine(x2, y - 9, x2, y);
-            painter.setFont(scaleFont);
-            const int textW = fm.horizontalAdvance(label) + 10;
-            painter.drawText(QRectF((x1 + x2) / 2 - textW / 2, y - 34, textW, 28),
-                             Qt::AlignHCenter | Qt::AlignVCenter, label);
-        }
-    }
+        painter.setPen(QColor(25, 38, 55));
+        painter.setRenderHint(QPainter::TextAntialiasing, true);
 
+        const int ticks = 5;
+        for (int i = 0; i <= ticks; ++i) {
+            const int x = left + i * (photo.width() - 1) / ticks;
+            painter.setPen(QPen(QColor(25, 38, 55), 1.4));
+            painter.drawLine(x, top + photo.height(), x, top + photo.height() + 7);
+            const double lon = lonMin + (lonMax - lonMin) * i / ticks;
+            painter.save();
+            painter.translate(x - 2, top + photo.height() + 12);
+            painter.rotate(45);
+            painter.drawText(0, 0, QString::number(lon, 'f', 6));
+            painter.restore();
+        }
+        for (int i = 0; i <= ticks; ++i) {
+            const int y = top + i * (photo.height() - 1) / ticks;
+            painter.setPen(QPen(QColor(25, 38, 55), 1.4));
+            painter.drawLine(left - 7, y, left, y);
+            const double lat = latMax - (latMax - latMin) * i / ticks;
+            painter.drawText(QRectF(2, y - 16, left - 18, 32),
+                             Qt::AlignRight | Qt::AlignVCenter,
+                             QString::number(lat, 'f', 6));
+        }
+        painter.setFont(titleFont);
+        painter.drawText(QRectF(left, output.height() - 32, photo.width(), 28),
+                         Qt::AlignHCenter | Qt::AlignVCenter, QStringLiteral("Longitude"));
+        painter.save();
+        painter.translate(34, top + photo.height() / 2);
+        painter.rotate(-90);
+        painter.drawText(QRectF(-140, -14, 280, 28), Qt::AlignCenter, QStringLiteral("Latitude"));
+        painter.restore();
+
+        if (std::isfinite(mapMinValue) && std::isfinite(mapMaxValue) &&
+            mapMaxValue > mapMinValue) {
+            const int barX = left + photo.width() + 42;
+            const int barY = top;
+            const int barW = 20;
+            const int barH = photo.height();
+            const int steps = 128;
+            for (int i = 0; i < steps; ++i) {
+                const double t = 1.0 - double(i) / double(steps - 1);
+                const double x = qBound(0.0, t, 1.0);
+                const auto channel = [x](double center) {
+                    return qBound(0, qRound(255.0 * qBound(0.0, 1.5 - qAbs(4.0 * x - center), 1.0)), 255);
+                };
+                painter.fillRect(barX, barY + i * barH / steps, barW, barH / steps + 1,
+                                 QColor(channel(3.0), channel(2.0), channel(1.0)));
+            }
+            painter.setPen(QPen(QColor(25, 38, 55), 1.4));
+            painter.drawRect(barX, barY, barW, barH);
+            painter.setFont(titleFont);
+            painter.drawText(QRectF(barX, barY - 50, 100, 28), Qt::AlignLeft, QStringLiteral("B (nT)"));
+            painter.setFont(axisFont);
+            painter.drawText(QRectF(barX + barW + 10, barY - 12, 70, 24),
+                             Qt::AlignLeft | Qt::AlignVCenter, QString::number(mapMaxValue, 'f', 1));
+            painter.drawText(QRectF(barX + barW + 10, barY + barH / 2 - 12, 70, 24),
+                             Qt::AlignLeft | Qt::AlignVCenter,
+                             QString::number((mapMinValue + mapMaxValue) * 0.5, 'f', 1));
+            painter.drawText(QRectF(barX + barW + 10, barY + barH - 12, 70, 24),
+                             Qt::AlignLeft | Qt::AlignVCenter, QString::number(mapMinValue, 'f', 1));
+        }
+        // Ground scale bar. The estimate uses the nadir horizontal footprint
+        // derived from the active AGL and horizontal FOV.
+        const double effectiveAgl = pose.agl > 0.0 ? pose.agl : heightAGL;
+        if (effectiveAgl > 0.0 && photo.width() > 0) {
+            const double metersPerPixel = 2.0 * effectiveAgl
+                    * std::tan(hfov * M_PI / 360.0) / double(photo.width());
+            double desiredMeters = photo.width() * 0.18 * metersPerPixel;
+            const double exponent = std::pow(10.0, std::floor(std::log10(qMax(desiredMeters, 0.001))));
+            const double base = desiredMeters / exponent;
+            const double nice = base < 1.5 ? 1.0 : (base < 3.5 ? 2.0 : (base < 7.5 ? 5.0 : 10.0));
+            const double meters = qMax(0.001, nice * exponent);
+            double scalePx = meters / metersPerPixel;
+            scalePx = qMin(scalePx, photo.width() * 0.35);
+            if (scalePx >= 12.0) {
+                const int x2 = left + photo.width() - 34;
+                const int x1 = x2 - int(scalePx);
+                const int y = top + photo.height() - 30;
+                QFont scaleFont(QStringLiteral("Times New Roman"), 16, QFont::Bold);
+                QFontMetrics fm(scaleFont);
+                const QString label = QStringLiteral("%1 m").arg(meters, 0, 'g', 3);
+                painter.setPen(QPen(QColor(0, 124, 138), 3.0));
+                painter.setBrush(Qt::NoBrush);
+                painter.drawLine(x1, y, x2, y);
+                painter.drawLine(x1, y - 9, x1, y);
+                painter.drawLine(x2, y - 9, x2, y);
+                painter.setFont(scaleFont);
+                const int textW = fm.horizontalAdvance(label) + 10;
+                painter.drawText(QRectF((x1 + x2) / 2 - textW / 2, y - 34, textW, 28),
+                                 Qt::AlignHCenter | Qt::AlignVCenter, label);
+            }
+        }
+
+    }
     painter.end();
 
     if (cancel && cancel->load()) {
@@ -399,6 +457,15 @@ PhotoOverlayResult buildOverlay(const QString& photoPath, const QString& magImag
     result.outputWidth = output.width();
     result.outputHeight = output.height();
     result.image = output;
+    result.geoMinLon = lonMin;
+    result.geoMaxLon = lonMax;
+    result.geoMinLat = latMin;
+    result.geoMaxLat = latMax;
+    result.mapMinValue = mapMinValue;
+    result.mapMaxValue = mapMaxValue;
+    result.metersPerPixel = (cameraPose.heightAGL > 0.0)
+            ? 2.0 * cameraPose.heightAGL * std::tan(hfov * M_PI / 360.0) / double(photo.width())
+            : 0.0;
     result.ok = true;
     return result;
 }
@@ -579,8 +646,16 @@ QString PhotoOverlayController::writeSidecar(const QString& photoPath, double lo
 
 QString PhotoOverlayController::saveOutput()
 {
-    if (_previewImage.isNull()) {
+    if (_previewImage.isNull() || _lastPhotoPath.isEmpty() || _lastMagPath.isEmpty()) {
         _setError(tr("没有可保存的叠加预览"));
+        return {};
+    }
+    const PhotoOverlayResult decorated = buildOverlay(
+                _lastPhotoPath, _lastMagPath, _hfov, _vfov, _heightAGL,
+                _yawOffset, _transparency, _lastMinValue, _lastMaxValue,
+                _lastTrajectoryPath, true, QString(), nullptr);
+    if (!decorated.ok) {
+        _setError(decorated.error);
         return {};
     }
     const QString outDir = MagLabPaths::instance()->photoOverlayDir();
@@ -593,7 +668,7 @@ QString PhotoOverlayController::saveOutput()
     const QString path = QDir(outDir).filePath(
                 QStringLiteral("%1_overlay_%2.jpg")
                     .arg(sessionName, QUuid::createUuid().toString(QUuid::Id128)));
-    if (!_previewImage.save(path, "JPG", 92)) {
+    if (!decorated.image.save(path, "JPG", 92)) {
         _setError(tr("叠加图片保存失败：%1").arg(path));
         return {};
     }
@@ -729,9 +804,10 @@ QVariantMap PhotoOverlayController::pixelToGeo(const QString& photoPath, double 
     PhotoPose pose;
     QString error;
     if (!readPose(sidecar, pose, error)) return result;
-    // Output layout used by buildOverlay().
-    constexpr int left = 140;
-    constexpr int top = 62;
+    // The interactive preview uses the undecorated raw image, whose top-left
+    // pixel is the photo origin. Decorated output margins are added only on save.
+    constexpr int left = 0;
+    constexpr int top = 0;
     const double u = x - left;
     const double v = y - top;
     if (u < 0.0 || v < 0.0 || u > photo.width() - 1 || v > photo.height() - 1) return result;
@@ -741,7 +817,7 @@ QVariantMap PhotoOverlayController::pixelToGeo(const QString& photoPath, double 
     cameraPose.refLatDeg = pose.lat;
     cameraPose.refLonDeg = pose.lon;
     cameraPose.refAltM = 0.0;
-    cameraPose.heightAGL = _heightAGL;
+    cameraPose.heightAGL = pose.agl > 0.0 ? pose.agl : _heightAGL;
     cameraPose.rollDeg = pose.roll;
     cameraPose.pitchDeg = pose.pitch;
     cameraPose.yawDeg = pose.yaw + _yawOffset;
@@ -750,6 +826,40 @@ QVariantMap PhotoOverlayController::pixelToGeo(const QString& photoPath, double 
     result[QStringLiteral("valid")] = true;
     result[QStringLiteral("lon")] = geo.lonDeg;
     result[QStringLiteral("lat")] = geo.latDeg;
+    return result;
+}
+
+QVariantMap PhotoOverlayController::geoToPixel(const QString& photoPath, double lon, double lat) const
+{
+    QVariantMap result;
+    result[QStringLiteral("valid")] = false;
+    QImage photo(photoPath);
+    if (photo.isNull()) return result;
+
+    const QString sidecar = QFileInfo::exists(sidecarFor(photoPath))
+            ? sidecarFor(photoPath) : legacyAdjacentSidecar(photoPath);
+    PhotoPose pose;
+    QString error;
+    if (!readPose(sidecar, pose, error)) return result;
+
+    GeoCameraProjector::CameraIntrinsics K =
+        GeoCameraProjector::intrinsicsFromFov(photo.width(), photo.height(), _hfov, _vfov);
+    GeoCameraProjector::CameraPose cameraPose;
+    cameraPose.refLatDeg = pose.lat;
+    cameraPose.refLonDeg = pose.lon;
+    cameraPose.refAltM = 0.0;
+    cameraPose.heightAGL = pose.agl > 0.0 ? pose.agl : _heightAGL;
+    cameraPose.rollDeg = pose.roll;
+    cameraPose.pitchDeg = pose.pitch;
+    cameraPose.yawDeg = pose.yaw + _yawOffset;
+
+    QPointF pixel;
+    if (!GeoCameraProjector::geoToPixelByPose(lat, lon, 0.0, cameraPose, K, pixel)) {
+        return result;
+    }
+    result[QStringLiteral("valid")] = true;
+    result[QStringLiteral("x")] = pixel.x();
+    result[QStringLiteral("y")] = pixel.y();
     return result;
 }
 
@@ -779,8 +889,44 @@ QVariantMap PhotoOverlayController::mapPixelToGeo(const QString& magImagePath, d
     return result;
 }
 
+QVariantMap PhotoOverlayController::mapGeoInfo(const QString& magImagePath) const
+{
+    QVariantMap result;
+    result[QStringLiteral("valid")] = false;
+    QImage mag(magImagePath);
+    if (mag.isNull()) return result;
+    const QFileInfo info(magImagePath);
+    const QString sidecar = info.dir().filePath(QStringLiteral("txt%1.txt").arg(info.completeBaseName()));
+    Corner corners[4];
+    double minValue = std::numeric_limits<double>::quiet_NaN();
+    double maxValue = minValue;
+    QString error;
+    if (!readCorners(sidecar, corners, minValue, maxValue, error)) return result;
+    double lonMin = corners[0].lon, lonMax = corners[0].lon;
+    double latMin = corners[0].lat, latMax = corners[0].lat;
+    for (int i = 1; i < 4; ++i) {
+        lonMin = qMin(lonMin, corners[i].lon);
+        lonMax = qMax(lonMax, corners[i].lon);
+        latMin = qMin(latMin, corners[i].lat);
+        latMax = qMax(latMax, corners[i].lat);
+    }
+    result[QStringLiteral("valid")] = true;
+    result[QStringLiteral("minLon")] = lonMin;
+    result[QStringLiteral("maxLon")] = lonMax;
+    result[QStringLiteral("minLat")] = latMin;
+    result[QStringLiteral("maxLat")] = latMax;
+    result[QStringLiteral("minValue")] = minValue;
+    result[QStringLiteral("maxValue")] = maxValue;
+    result[QStringLiteral("hasRange")] = std::isfinite(minValue) && std::isfinite(maxValue);
+    const double latMid = (latMin + latMax) * 0.5;
+    const double metersWide = qAbs(lonMax - lonMin) * 111320.0 * qCos(qDegreesToRadians(latMid));
+    result[QStringLiteral("metersPerPixel")] = metersWide / qMax(1, mag.width());
+    return result;
+}
+
 void PhotoOverlayController::generate(const QString& photoPath, const QString& magImagePath,
-                                      double minValue, double maxValue)
+                                      double minValue, double maxValue,
+                                      const QString& trajectoryPath)
 {
     if (_busy) return;
     if (photoPath.isEmpty() || magImagePath.isEmpty()) {
@@ -805,9 +951,14 @@ void PhotoOverlayController::generate(const QString& photoPath, const QString& m
     const double heightAGL = _heightAGL;
     const double yawOffset = _yawOffset;
     const double transparency = _transparency;
+    _lastPhotoPath = photoPath;
+    _lastMagPath = magImagePath;
+    _lastMinValue = minValue;
+    _lastMaxValue = maxValue;
+    _lastTrajectoryPath = trajectoryPath;
     _watcher->setFuture(QtConcurrent::run([=] {
         return buildOverlay(photoPath, magImagePath, hfov, vfov, heightAGL,
-                            yawOffset, transparency, minValue, maxValue, outputPath, cancel);
+                            yawOffset, transparency, minValue, maxValue, trajectoryPath, false, outputPath, cancel);
     }));
 }
 
@@ -834,11 +985,17 @@ void PhotoOverlayController::_onFinished()
     _previewImage = result.image;
     _previewPath = result.outputPath;
     _previewImage.save(_previewPath, "JPG", 92);
+    _geoMinLon = result.geoMinLon; _geoMaxLon = result.geoMaxLon;
+    _geoMinLat = result.geoMinLat; _geoMaxLat = result.geoMaxLat;
+    _mapMinValue = result.mapMinValue; _mapMaxValue = result.mapMaxValue;
+    _metersPerPixel = result.metersPerPixel;
+    _outputPath.clear();
     _outputWidth = result.outputWidth;
     _outputHeight = result.outputHeight;
+    emit outputPathChanged();
     emit previewPathChanged();
     emit outputSizeChanged();
     _setError({});
-    _setStatus(tr("已保存叠加图：%1").arg(QFileInfo(result.outputPath).fileName()));
+    _setStatus(tr("预览已生成；调整参数后可重新预览，确认后保存"));
     emit finished(true);
 }

@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtPositioning
 
 import QGC
 import QGroundControl
@@ -42,6 +43,14 @@ Rectangle {
     property string captureStatus: ""
     property string overlayCoordinateText: ""
     property string mapCoordinateText: ""
+    property var selectedCoordinate: QtPositioning.coordinate()
+    property real surveyWidth: 20
+    property real surveyHeight: 20
+    property real surveySpacing: 5
+    property var surveyGeoPolygon: []
+    property var surveyImagePolygon: []
+    property var surveyImageRouteLines: []
+    readonly property var mapGeo: selectedMap() !== "" ? overlay.mapGeoInfo(selectedMap()) : ({})
     property int previewMode: 0          // 0 overlay, 1 magnetic map
     property string manualMinValue: ""
     property string manualMaxValue: ""
@@ -51,6 +60,7 @@ Rectangle {
 
     Component.onCompleted: refreshLists()
     onVisibleChanged: if (visible) refreshLists()
+    onPreviewModeChanged: updateSurveyPreview()
 
     function refreshLists() {
         photoModel = MagLabPaths.photoFiles().filter(function(path) {
@@ -94,9 +104,9 @@ Rectangle {
         const minValue = parseFloat(manualMinValue)
         const maxValue = parseFloat(manualMaxValue)
         if (isFinite(minValue) && isFinite(maxValue) && maxValue > minValue) {
-            overlay.generate(selectedPhoto(), selectedMap(), minValue, maxValue)
+            overlay.generate(selectedPhoto(), selectedMap(), minValue, maxValue, selectedData())
         } else {
-            overlay.generate(selectedPhoto(), selectedMap())
+            overlay.generate(selectedPhoto(), selectedMap(), NaN, NaN, selectedData())
         }
     }
 
@@ -128,8 +138,8 @@ Rectangle {
         importedData = bundle.survey || ""
         captureStatus = qsTr("任务包已导入")
         if (importedMap !== "") {
-            if (bundle.hasRange) overlay.generate(importedPhoto, importedMap, bundle.minValue, bundle.maxValue)
-            else overlay.generate(importedPhoto, importedMap)
+            if (bundle.hasRange) overlay.generate(importedPhoto, importedMap, bundle.minValue, bundle.maxValue, selectedData())
+            else overlay.generate(importedPhoto, importedMap, NaN, NaN, selectedData())
         } else if (importedData !== "") {
             mapGenerator.selectSource(importedData)
             mapGenerator.generate()
@@ -149,12 +159,74 @@ Rectangle {
         videoManager.grabImage(path)
     }
 
+    function _rectanglePolygon(center, width, height) {
+        if (!center || !center.isValid || !(width > 0) || !(height > 0)) return []
+        const north = center.atDistanceAndAzimuth(height / 2, 0)
+        const south = center.atDistanceAndAzimuth(height / 2, 180)
+        return [
+            north.atDistanceAndAzimuth(width / 2, -90), // NW
+            north.atDistanceAndAzimuth(width / 2,  90), // NE
+            south.atDistanceAndAzimuth(width / 2,  90), // SE
+            south.atDistanceAndAzimuth(width / 2, -90)  // SW
+        ]
+    }
+
+    function updateSurveyPreview() {
+        surveyGeoPolygon = _rectanglePolygon(selectedCoordinate, surveyWidth, surveyHeight)
+        surveyImagePolygon = []
+        if (previewMode === 0 && selectedPhoto() !== "" && surveyGeoPolygon.length >= 3) {
+            const pixels = []
+            for (let i = 0; i < surveyGeoPolygon.length; ++i) {
+                const geo = surveyGeoPolygon[i]
+                const pixel = overlay.geoToPixel(selectedPhoto(), geo.longitude, geo.latitude)
+                if (pixel.valid) pixels.push(Qt.point(pixel.x, pixel.y))
+            }
+            if (pixels.length === surveyGeoPolygon.length) {
+                surveyImagePolygon = pixels
+            }
+        }
+
+        surveyImageRouteLines = []
+        if (previewMode === 0 && selectedPhoto() !== "" &&
+                selectedCoordinate && selectedCoordinate.isValid &&
+                surveyWidth > 0 && surveyHeight > 0 && surveySpacing > 0) {
+            const lines = []
+            const halfW = surveyWidth / 2
+            const halfH = surveyHeight / 2
+            const lineCount = Math.max(1, Math.ceil(surveyHeight / surveySpacing))
+            for (let i = 0; i <= lineCount; ++i) {
+                const north = selectedCoordinate.atDistanceAndAzimuth(
+                            -halfH + i * surveyHeight / lineCount, 0)
+                const west = north.atDistanceAndAzimuth(halfW, -90)
+                const east = north.atDistanceAndAzimuth(halfW, 90)
+                const p1 = overlay.geoToPixel(selectedPhoto(), west.longitude, west.latitude)
+                const p2 = overlay.geoToPixel(selectedPhoto(), east.longitude, east.latitude)
+                if (p1.valid && p2.valid) {
+                    lines.push([Qt.point(p1.x, p1.y), Qt.point(p2.x, p2.y)])
+                }
+            }
+            surveyImageRouteLines = lines
+        }
+    }
+
+    function _setClickedCoordinate(geo, text) {
+        if (geo && geo.valid) {
+            selectedCoordinate = QtPositioning.coordinate(geo.lat, geo.lon)
+            updateSurveyPreview()
+            return true
+        }
+        selectedCoordinate = QtPositioning.coordinate()
+        surveyGeoPolygon = []
+        return false
+    }
+
     function updateOverlayCoordinate(x, y, width, height) {
         if (selectedPhoto() === "") return
         const geo = overlay.pixelToGeo(selectedPhoto(), x, y)
         overlayCoordinateText = geo.valid
                 ? qsTr("经度 %1   纬度 %2").arg(geo.lon.toFixed(7)).arg(geo.lat.toFixed(7))
                 : qsTr("点击位置不在照片有效范围内")
+        _setClickedCoordinate(geo, overlayCoordinateText)
     }
     function updateMapCoordinate(x, y, width, height) {
         if (selectedMap() === "") return
@@ -162,6 +234,56 @@ Rectangle {
         mapCoordinateText = geo.valid
                 ? qsTr("经度 %1   纬度 %2").arg(geo.lon.toFixed(7)).arg(geo.lat.toFixed(7))
                 : qsTr("无法计算该位置经纬度")
+        _setClickedCoordinate(geo, mapCoordinateText)
+    }
+
+    function requestSurveyPlan() {
+        if (!selectedCoordinate || !selectedCoordinate.isValid) {
+            captureStatus = qsTr("请先在照片或磁图上点击一个有效位置")
+            return
+        }
+        if (!(surveyWidth > 0) || !(surveyHeight > 0) || !(surveySpacing > 0)) {
+            captureStatus = qsTr("扫测宽高和间距必须大于 0")
+            return
+        }
+        updateSurveyPreview()
+        if (typeof mainWindow !== "undefined" && mainWindow) {
+            mainWindow.createSurveyPlan(selectedCoordinate, surveyWidth, surveyHeight, surveySpacing)
+        } else {
+            captureStatus = qsTr("无法打开航线规划页面")
+        }
+    }
+
+    function selectSurveyRegion(x1, y1, x2, y2, width, height) {
+        const p1 = previewMode === 0
+                ? overlay.pixelToGeo(selectedPhoto(), x1, y1)
+                : overlay.mapPixelToGeo(selectedMap(), x1, y1)
+        const p2 = previewMode === 0
+                ? overlay.pixelToGeo(selectedPhoto(), x2, y2)
+                : overlay.mapPixelToGeo(selectedMap(), x2, y2)
+        if (!p1.valid || !p2.valid) {
+            captureStatus = qsTr("框选区域不在有效经纬度范围内")
+            return
+        }
+
+        const center = QtPositioning.coordinate((p1.lat + p2.lat) / 2,
+                                                (p1.lon + p2.lon) / 2)
+        const latSpan = Math.abs(p2.lat - p1.lat)
+        const lonSpan = Math.abs(p2.lon - p1.lon)
+        const midLatRad = center.latitude * Math.PI / 180
+        surveyWidth = Math.max(1, lonSpan * 111320 * Math.cos(midLatRad))
+        surveyHeight = Math.max(1, latSpan * 111320)
+        selectedCoordinate = center
+
+        const north = center.atDistanceAndAzimuth(surveyHeight / 2, 0)
+        const south = center.atDistanceAndAzimuth(surveyHeight / 2, 180)
+        surveyGeoPolygon = [
+            north.atDistanceAndAzimuth(surveyWidth / 2, -90),
+            north.atDistanceAndAzimuth(surveyWidth / 2,  90),
+            south.atDistanceAndAzimuth(surveyWidth / 2,  90),
+            south.atDistanceAndAzimuth(surveyWidth / 2, -90)
+        ]
+        requestSurveyPlan()
     }
 
     Connections {
@@ -433,6 +555,62 @@ Rectangle {
                         QGCButton { text: qsTr("叠加结果"); primary: previewMode === 0; onClicked: previewMode = 0 }
                         QGCButton { text: qsTr("磁图"); primary: previewMode === 1; onClicked: previewMode = 1 }
                         Item { Layout.fillWidth: true }
+
+                        Button {
+                            id: resetPreviewButton
+                            width: 40
+                            height: 40
+                            padding: 0
+                            scale: hovered ? 1.06 : 1.0
+                            hoverEnabled: !ScreenTools.isMobile
+                            onClicked: previewView.resetView()
+                            ToolTip.visible: hovered && !ScreenTools.isMobile
+                            ToolTip.text: qsTr("重置缩放")
+                            ToolTip.delay: 500
+
+                            background: Item {
+                                Rectangle {
+                                    anchors.fill: parent
+                                    radius: width / 2
+                                    gradient: Gradient {
+                                        GradientStop { position: 0.0; color: "#FFFFFF" }
+                                        GradientStop { position: 0.45; color: "#EAF5F7" }
+                                        GradientStop { position: 1.0; color: "#B7D5DB" }
+                                    }
+                                    border.width: 1
+                                    border.color: "#9FC3CA"
+                                }
+                                Rectangle {
+                                    anchors.left: parent.left
+                                    anchors.top: parent.top
+                                    anchors.leftMargin: parent.width * 0.20
+                                    anchors.topMargin: parent.height * 0.14
+                                    width: parent.width * 0.34
+                                    height: parent.height * 0.26
+                                    radius: width / 2
+                                    color: "#FFFFFF"
+                                    opacity: 0.78
+                                }
+                                Rectangle {
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.bottom: parent.bottom
+                                    anchors.margins: 3
+                                    height: parent.height * 0.25
+                                    radius: width / 2
+                                    color: "#4C8C98"
+                                    opacity: 0.10
+                                }
+                            }
+                            contentItem: QGCColoredImage {
+                                source: "/InstrumentValueIcons/reload.svg"
+                                color: "#31506B"
+                                fillMode: Image.PreserveAspectFit
+                                width: 20
+                                height: 20
+                                anchors.centerIn: parent
+                            }
+                        }
                         QGCButton {
                             text: overlay.busy ? qsTr("正在生成…") : qsTr("生成预览")
                             primary: true
@@ -451,6 +629,7 @@ Rectangle {
                     }
 
                     ZoomablePreview {
+                        id: previewView
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         Layout.minimumHeight: 360
@@ -462,6 +641,32 @@ Rectangle {
                                       : Qt.size(0, 0)
                         emptyText: previewMode === 0 ? qsTr("生成预览后在此显示") : qsTr("选择磁图后在此预览")
                         coordinateText: previewMode === 0 ? overlayCoordinateText : mapCoordinateText
+                        coordinateActionText: root.selectedCoordinate.isValid ? qsTr("规划扫测") : ""
+                        secondaryCoordinateActionText: qsTr("框选扫测")
+                        surveyGeoPolygon: root.surveyGeoPolygon
+                        surveyImagePolygon: root.surveyImagePolygon
+                        surveyImageRouteLines: root.surveyImageRouteLines
+                        onCoordinateActionClicked: requestSurveyPlan()
+                        onSecondaryCoordinateActionClicked: {
+                            if (previewMode === 0 && selectedPhoto() === "") {
+                                captureStatus = qsTr("请先选择照片")
+                            } else if (previewMode === 1 && selectedMap() === "") {
+                                captureStatus = qsTr("请先选择磁图")
+                            } else {
+                                previewView.regionSelectionActive = true
+                                captureStatus = qsTr("在预览图上拖动框选扫测区域")
+                            }
+                        }
+                        onRegionSelected: (x1, y1, x2, y2, width, height) =>
+                            selectSurveyRegion(x1, y1, x2, y2, width, height)
+                        showGeo: previewMode === 0 ? overlay.hasPreview : selectedMap() !== ""
+                        geoMinLon: previewMode === 0 ? overlay.geoMinLon : (mapGeo.minLon || 0)
+                        geoMaxLon: previewMode === 0 ? overlay.geoMaxLon : (mapGeo.maxLon || 0)
+                        geoMinLat: previewMode === 0 ? overlay.geoMinLat : (mapGeo.minLat || 0)
+                        geoMaxLat: previewMode === 0 ? overlay.geoMaxLat : (mapGeo.maxLat || 0)
+                        mapMinValue: previewMode === 0 ? overlay.mapMinValue : (mapGeo.hasRange ? mapGeo.minValue : 0)
+                        mapMaxValue: previewMode === 0 ? overlay.mapMaxValue : (mapGeo.hasRange ? mapGeo.maxValue : 0)
+                        metersPerPixel: previewMode === 0 ? overlay.metersPerPixel : (mapGeo.metersPerPixel || 0)
                         onImageClicked: (x, y, width, height) => {
                             if (previewMode === 0) updateOverlayCoordinate(x, y, width, height)
                             else updateMapCoordinate(x, y, width, height)

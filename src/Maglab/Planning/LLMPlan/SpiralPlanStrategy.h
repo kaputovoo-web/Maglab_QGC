@@ -29,6 +29,7 @@ public:
     QList<Fact*> facts() override;
     void recomputeGeometry(const QGeoCoordinate& center) override;
     QList<QGeoCoordinate> path() const override { return _displayPath; }
+    QList<LLMArcSegment> arcSegments() const override { return _arcSegments; }
     QList<QGeoCoordinate> arcBoundaryPoints() const { return _arcBoundaryPoints; }
     QString editorQmlName() const override { return QStringLiteral("LLMSpiralEditor.qml"); }
     QJsonObject saveParams() const override;
@@ -88,6 +89,7 @@ private:
     FactMetaData* _rotationAngleMetaData = nullptr;
 
     QList<QGeoCoordinate> _displayPath;
+    QList<LLMArcSegment> _arcSegments;
     QList<QGeoCoordinate> _arcBoundaryPoints;
     QList<double> _pointRadius;
     QList<int> _pointArc;
@@ -100,6 +102,8 @@ private:
     float _plannedJerkMsss = 5.0f;
     int _lastItemCount = 0;
     QGeoCoordinate _lastCenter;
+
+    friend class SpiralMissionItemBuilder;
 
     // tan(phi)=v^2/(g*r). The planner reserves 20% lateral-acceleration
     // headroom for wind, tracking error and spline interpolation.

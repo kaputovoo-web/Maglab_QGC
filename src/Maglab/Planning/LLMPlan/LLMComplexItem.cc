@@ -14,6 +14,7 @@
 #include "FomPlanStrategy.h"
 #include "CustomPlanStrategy.h"
 #include "SquarePlanStrategy.h"
+#include "SpiralMissionItemBuilder.h"
 #include "JsonParsing.h"
 #include "MissionController.h"
 #include "QGCQGeoCoordinate.h"
@@ -21,6 +22,7 @@
 #include "FlightPathSegment.h"
 #include "MAVLinkProtocol.h"
 #include "Vehicle.h"
+#include "FirmwarePlugin.h"
 #include "LinkInterface.h"
 #include "SurveyComplexItem.h"
 #include "CameraCalc.h"
@@ -51,8 +53,11 @@ LLMComplexItem::LLMComplexItem(PlanMasterController* masterController, bool flyV
     connect(_voiceStrategy, &VoicePlanStrategy::transcriptReady, this, &LLMComplexItem::voiceTranscriptReady);
     connect(_voiceStrategy, &VoicePlanStrategy::reviewChanged, this, &LLMComplexItem::safetyReviewChanged);
 
-    // Default to Spiral mode
+    // Default to Spiral mode. A VTOL/fixed-wing route uses native half-circle
+    // loiter commands; a multi-rotor keeps the existing spline representation.
     _planMode = Spiral;
+    _spiralOutputMode = (_controllerVehicle != nullptr && !_controllerVehicle->multiRotor())
+                      ? SpiralLoiterTurns : SpiralSpline;
     _activeStrategy = _spiralStrategy;
     _connectStrategy(_activeStrategy);
 
@@ -132,6 +137,35 @@ void LLMComplexItem::setPlanMode(int mode)
     emit planModeChanged(_planMode);
     emit pathChanged();
     emit complexDistanceChanged();
+    emit lastSequenceNumberChanged(lastSequenceNumber());
+}
+
+bool LLMComplexItem::spiralSplineAvailable() const
+{
+    return _controllerVehicle == nullptr || _controllerVehicle->multiRotor();
+}
+
+int LLMComplexItem::spiralOutputMode() const
+{
+    // VTOL/fixed-wing routes always use native loiter semicircles, even when
+    // the plan was created while no vehicle was connected.
+    return spiralSplineAvailable() ? _spiralOutputMode : SpiralLoiterTurns;
+}
+
+void LLMComplexItem::setSpiralOutputMode(int mode)
+{
+    if (mode != SpiralSpline && mode != SpiralLoiterTurns) {
+        return;
+    }
+    if (mode == SpiralSpline && !spiralSplineAvailable()) {
+        return;
+    }
+    if (mode == _spiralOutputMode) {
+        return;
+    }
+    _spiralOutputMode = mode;
+    _setDirty();
+    emit spiralOutputModeChanged(_spiralOutputMode);
     emit lastSequenceNumberChanged(lastSequenceNumber());
 }
 
@@ -510,7 +544,7 @@ QVariantList LLMComplexItem::arcBoundaryPath() const
 
 int LLMComplexItem::waypointCount() const
 {
-    return _activeStrategy ? _activeStrategy->lastSequenceNumber() : 0;
+    return _activeStrategy ? _generatedStrategyItemCount() : 0;
 }
 
 double LLMComplexItem::estimatedFlightTime()
@@ -629,12 +663,41 @@ double LLMComplexItem::specifiedFlightSpeed()
                            : std::numeric_limits<double>::quiet_NaN();
 }
 
+QList<MissionItem*> LLMComplexItem::_generateStrategyItems(double relAlt, MAV_FRAME frame, QObject* parent) const
+{
+    if (_activeStrategy == nullptr) {
+        return {};
+    }
+    if (_planMode == Spiral && _spiralStrategy != nullptr) {
+        const bool loiterTurns = (_spiralOutputMode == SpiralLoiterTurns) ||
+                                 (_controllerVehicle != nullptr && !_controllerVehicle->multiRotor());
+        const bool vtol = _controllerVehicle != nullptr && _controllerVehicle->vtol();
+        return SpiralMissionItemBuilder::build(*_spiralStrategy, loiterTurns, vtol,
+                                               relAlt, frame, parent);
+    }
+    return const_cast<LLMPlanStrategy*>(_activeStrategy)->missionItems(relAlt, frame, parent);
+}
+
+int LLMComplexItem::_generatedStrategyItemCount() const
+{
+    if (_activeStrategy == nullptr) {
+        return 0;
+    }
+    if (_planMode == Spiral && _spiralStrategy != nullptr) {
+        const bool loiterTurns = (_spiralOutputMode == SpiralLoiterTurns) ||
+                                 (_controllerVehicle != nullptr && !_controllerVehicle->multiRotor());
+        const bool vtol = _controllerVehicle != nullptr && _controllerVehicle->vtol();
+        return SpiralMissionItemBuilder::itemCount(*_spiralStrategy, loiterTurns, vtol);
+    }
+    return _activeStrategy->lastSequenceNumber();
+}
+
 int LLMComplexItem::lastSequenceNumber() const
 {
     if (_activeStrategy == nullptr) {
         return _sequenceNumber;
     }
-    int count = _activeStrategy->lastSequenceNumber();
+    int count = _generatedStrategyItemCount();
     const double specifiedSpeed = _activeStrategy->specifiedFlightSpeed();
     if (std::isfinite(specifiedSpeed) && specifiedSpeed > 0.0 && _controllerVehicle != nullptr) {
         // appendMissionItems always restores a finite default/fallback speed.
@@ -690,18 +753,19 @@ void LLMComplexItem::appendMissionItems(QList<MissionItem*>& items, QObject* mis
 
     // Build waypoints via active strategy. For the spiral this also computes the
     // curvature-limited speed profile and emits mission-local DO_CHANGE_SPEED items.
-    QList<MissionItem*> strategyItems = _activeStrategy->missionItems(relAlt, mavFrame, missionItemParent);
+    QList<MissionItem*> strategyItems = _generateStrategyItems(relAlt, mavFrame, missionItemParent);
 
     // Never silently drop individual commands: that would invalidate the sequence
     // range advertised to the following mission item. Reject the entire output.
-    bool validOutput = strategyItems.size() == _activeStrategy->lastSequenceNumber();
+    bool validOutput = strategyItems.size() == _generatedStrategyItemCount();
     for (const MissionItem* item : strategyItems) {
         if (!item) {
             validOutput = false;
             break;
         }
         const bool navigationItem = item->command() == MAV_CMD_NAV_WAYPOINT ||
-                                    item->command() == MAV_CMD_NAV_SPLINE_WAYPOINT;
+                                    item->command() == MAV_CMD_NAV_SPLINE_WAYPOINT ||
+                                    item->command() == MAV_CMD_NAV_LOITER_TURNS;
         if (navigationItem &&
                 (!std::isfinite(item->param5()) || !std::isfinite(item->param6()) ||
                  !std::isfinite(item->param7()) ||
@@ -720,7 +784,17 @@ void LLMComplexItem::appendMissionItems(QList<MissionItem*>& items, QObject* mis
     // WPNAV_* parameters here: those are persistent vehicle-global parameters, so
     // changing them for Spiral would leak into following Survey/Sketch/Waypoint work.
     // Per-item speed is carried by DO_CHANGE_SPEED generated by the active strategy.
+    // ArduPlane (including QuadPlane VTOL) rejects spline waypoints during
+    // mission upload.  Keep the generated geometry and fall back to a normal
+    // waypoint when the connected firmware does not advertise spline support.
+    const bool splineSupported = _controllerVehicle != nullptr &&
+            _controllerVehicle->firmwarePlugin()->supportedMissionCommands(
+                _controllerVehicle->vehicleClass()).contains(MAV_CMD_NAV_SPLINE_WAYPOINT);
+
     for (MissionItem* mi : strategyItems) {
+        if (!splineSupported && mi->command() == MAV_CMD_NAV_SPLINE_WAYPOINT) {
+            mi->setCommand(MAV_CMD_NAV_WAYPOINT);
+        }
         // ArduPilot rejects NaN in navigation command parameters (notably
         // MAV_CMD_NAV_SPLINE_WAYPOINT Param4). Zero means no explicit yaw.
         if (!std::isfinite(mi->param1())) { mi->setParam1(0.0); }
@@ -796,15 +870,15 @@ bool LLMComplexItem::validateMissionOutput() const
     if (readyForSaveState() != ReadyForSave) {
         return false;
     }
-    const int declaredCount = _activeStrategy->lastSequenceNumber();
+    const int declaredCount = _generatedStrategyItemCount();
     const int mode = _activeStrategy->altitudeMode()->rawValue().toInt();
     const MAV_FRAME frame = mode == 1 ? MAV_FRAME_GLOBAL :
                             mode == 2 ? MAV_FRAME_GLOBAL_TERRAIN_ALT : MAV_FRAME_GLOBAL_RELATIVE_ALT;
     QObject owner;
-    const QList<MissionItem*> generated = _activeStrategy->missionItems(
+    const QList<MissionItem*> generated = _generateStrategyItems(
         _activeStrategy->minAMSLAltitude(), frame, &owner);
     if (generated.isEmpty() || generated.size() != declaredCount ||
-            _activeStrategy->lastSequenceNumber() != declaredCount) {
+            _generatedStrategyItemCount() != declaredCount) {
         return false;
     }
     for (const MissionItem* item : generated) {
@@ -812,10 +886,21 @@ bool LLMComplexItem::validateMissionOutput() const
             return false;
         }
         const int command = item->command();
-        if (command == MAV_CMD_NAV_WAYPOINT || command == MAV_CMD_NAV_SPLINE_WAYPOINT) {
+        if (command == MAV_CMD_NAV_WAYPOINT || command == MAV_CMD_NAV_SPLINE_WAYPOINT ||
+                command == MAV_CMD_NAV_LOITER_TURNS) {
             if (item->frame() != frame || !std::isfinite(item->param7()) ||
                     !std::isfinite(item->param5()) || !std::isfinite(item->param6()) ||
                     !QGeoCoordinate(item->param5(), item->param6()).isValid()) {
+                return false;
+            }
+            if (command == MAV_CMD_NAV_LOITER_TURNS &&
+                    (!std::isfinite(item->param1()) || item->param1() <= 0.0 ||
+                     !std::isfinite(item->param3()) || qAbs(item->param3()) <= 0.0)) {
+                return false;
+            }
+        } else if (command == MAV_CMD_DO_VTOL_TRANSITION) {
+            if (!std::isfinite(item->param1()) ||
+                    (item->param1() != 3.0 && item->param1() != 4.0)) {
                 return false;
             }
         } else if (command == MAV_CMD_DO_CHANGE_SPEED) {
@@ -838,6 +923,17 @@ VisualMissionItem::ReadyForSaveState LLMComplexItem::readyForSaveState() const
 {
     if (_activeStrategy == nullptr || _activeStrategy->path().size() < 2) {
         return NotReadyForSaveData;
+    }
+    if (_planMode == Spiral && spiralOutputMode() == SpiralSpline && !spiralSplineAvailable()) {
+        return NotReadyForSaveData;
+    }
+    if (_planMode == Spiral && spiralOutputMode() == SpiralLoiterTurns && _spiralStrategy != nullptr) {
+        const double turns = _spiralStrategy->turns()->rawValue().toDouble();
+        if (qAbs(turns * 2.0 - qRound(turns * 2.0)) > 1e-3) {
+            // LOITER_TURNS is emitted as exact 0.5-turn segments; a quarter
+            // turn cannot be represented without changing the requested path.
+            return NotReadyForSaveData;
+        }
     }
     const double altitude = _activeStrategy->minAMSLAltitude();
     const double speed = _activeStrategy->specifiedFlightSpeed();
@@ -881,6 +977,7 @@ void LLMComplexItem::save(QJsonArray& missionItems)
     obj[QStringLiteral("complexItemType")] = QString::fromLatin1(jsonComplexItemTypeValue);
     obj[QStringLiteral("version")]         = 1;
     obj[QStringLiteral("planMode")]        = _planMode;
+    obj[QStringLiteral("spiralOutputMode")] = spiralOutputMode();
 
     QJsonObject centerObj;
     centerObj[QStringLiteral("lat")]       = _coordinate.latitude();
@@ -903,6 +1000,7 @@ bool LLMComplexItem::load(const QJsonObject& complexObject, int sequenceNumber, 
         { "planMode", QJsonValue::Double, true },
         { "center",   QJsonValue::Object, true },
         { "version",  QJsonValue::Double, true },
+        { "spiralOutputMode", QJsonValue::Double, false },
     };
     if (!JsonParsing::validateKeys(complexObject, keyInfoList, errorString)) {
         return false;
@@ -930,6 +1028,19 @@ bool LLMComplexItem::load(const QJsonObject& complexObject, int sequenceNumber, 
     _planMode = planMode;
     _activateStrategy(planMode);
     _connectStrategy(_activeStrategy);
+
+    // Old plans have no spiralOutputMode. Keep their legacy spline behaviour
+    // on multi-rotors; VTOL/fixed-wing must use native loiter segments.
+    _spiralOutputMode = SpiralSpline;
+    if (complexObject.contains(QStringLiteral("spiralOutputMode"))) {
+        const int savedMode = complexObject[QStringLiteral("spiralOutputMode")].toInt();
+        if (savedMode == SpiralSpline || savedMode == SpiralLoiterTurns) {
+            _spiralOutputMode = savedMode;
+        }
+    }
+    if (!spiralSplineAvailable()) {
+        _spiralOutputMode = SpiralLoiterTurns;
+    }
 
     // Restore strategy params
     if (complexObject.contains(QStringLiteral("strategyParams"))) {

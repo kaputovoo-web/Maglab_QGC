@@ -79,7 +79,9 @@ MissionItemMapVisualBase {
         MapQuickItem {
             id:                               loiterMapQuickItem
             coordinate:                       _root._missionItem.coordinate
-            visible:                          _root.interactive && _missionItem.isSimpleItem && _missionItem.showLoiterRadius
+            visible:                          _root.interactive && _missionItem.isSimpleItem &&
+                                              _missionItem.showLoiterRadius &&
+                                              _missionItem.loiterTurns >= 0.999
 
             property alias blockSignals:      loiterMapCircleVisuals.blockSignals
             property alias radius:            _mapCircle.radius

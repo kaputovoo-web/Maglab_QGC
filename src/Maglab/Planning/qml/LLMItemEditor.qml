@@ -338,6 +338,30 @@ Rectangle {
                 font.pointSize: ScreenTools.smallFontPointSize
             }
             EnumSelector { fact: missionItem.strategyFactForMode(1, "direction") }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: _root._margin
+                QGCLabel {
+                    Layout.fillWidth: true
+                    text: qsTr("螺旋输出方式")
+                    font.pointSize: ScreenTools.smallFontPointSize
+                }
+                ComboBox {
+                    visible: missionItem.spiralSplineAvailable
+                    Layout.preferredWidth: ScreenTools.defaultFontPixelWidth * 15
+                    model: [qsTr("Spline 航点"), qsTr("Loiter 半圆")]
+                    currentIndex: missionItem.spiralOutputMode
+                    onActivated: (index) => missionItem.spiralOutputMode = index
+                }
+                QGCLabel {
+                    visible: !missionItem.spiralSplineAvailable
+                    Layout.fillWidth: true
+                    horizontalAlignment: Text.AlignRight
+                    text: qsTr("固定翼半圆盘旋")
+                    color: qgcPal.colorGrey
+                    font.pointSize: ScreenTools.smallFontPointSize
+                }
+            }
         }
 
         Card {

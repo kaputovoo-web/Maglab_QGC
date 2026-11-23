@@ -38,6 +38,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Planning/LLMPlan/LLMPlanStrategy.h
     Planning/LLMPlan/SpiralPlanStrategy.cc
     Planning/LLMPlan/SpiralPlanStrategy.h
+    Planning/LLMPlan/SpiralMissionItemBuilder.cc
+    Planning/LLMPlan/SpiralMissionItemBuilder.h
     Planning/LLMPlan/FomPlanStrategy.cc
     Planning/LLMPlan/FomPlanStrategy.h
     Planning/LLMPlan/CustomPlanStrategy.cc
@@ -126,10 +128,16 @@ set_source_files_properties(Realtime/qml/RealtimePage.qml PROPERTIES QT_RESOURCE
 set_source_files_properties(Images/MaglabIcon.svg PROPERTIES QT_RESOURCE_ALIAS MaglabIcon.svg)
 set_source_files_properties(Images/heu.svg PROPERTIES QT_RESOURCE_ALIAS heu.svg)
 set_source_files_properties(Images/xunxun.png PROPERTIES QT_RESOURCE_ALIAS xunxun.png)
+set_source_files_properties(Images/hyh.png PROPERTIES QT_RESOURCE_ALIAS hyh.png)
+set_source_files_properties(Images/heu_standard.png PROPERTIES QT_RESOURCE_ALIAS heu_standard.png)
+set_source_files_properties(Images/maglab_splash.png PROPERTIES QT_RESOURCE_ALIAS maglab_splash.png)
+set_source_files_properties(StartupBrandOverlay.qml PROPERTIES QT_RESOURCE_ALIAS StartupBrandOverlay.qml)
 qt_add_resources(${CMAKE_PROJECT_NAME} maglab_collection_page
     PREFIX "/maglab"
     FILES Survey/SimpleTest/CollectionPage.qml Survey/SimpleTest/MediaCapturePage.qml
-          Survey/SimpleTest/MagMapGalleryPage.qml MagLabPanel.qml Images/MaglabIcon.svg Images/heu.svg Images/xunxun.png
+          Survey/SimpleTest/MagMapGalleryPage.qml MagLabPanel.qml StartupBrandOverlay.qml
+          Images/MaglabIcon.svg Images/heu.svg Images/xunxun.png
+          Images/hyh.png Images/heu_standard.png Images/maglab_splash.png
           Compensation/qml/CompensationPage.qml
           Photo/qml/PhotoOverlayPage.qml Photo/qml/ZoomablePreview.qml
           Realtime/qml/RealtimePage.qml

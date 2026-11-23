@@ -254,7 +254,8 @@ Map {
 
         sourceItem: Image {
             id:             mapItemImage
-            source:         isNaN(gcsHeading) ? "qrc:/maglab/heu.svg" : "/res/QGCLogoArrow.svg"
+            // Simple, high-contrast GCS location marker (crosshair ring).
+            source:         "/qmlimages/MapCenter.svg"
             mipmap:         true
             antialiasing:   true
             fillMode:       Image.PreserveAspectFit
